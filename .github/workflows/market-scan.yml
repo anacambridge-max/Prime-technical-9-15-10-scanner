@@ -1,0 +1,17 @@
+name: Market Scan
+
+on:
+  schedule:
+    # 09:15–10:00 IST = 03:45–04:30 UTC, weekdays.
+    - cron: '45-59/5 3 * * 1-5'
+    - cron: '0-30/5 4 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger scanner
+        run: |
+          curl --fail-with-body --retry 2 --max-time 60 \
+            'https://prime-technical-9-15-10-scanner2.vercel.app/api/scan'
