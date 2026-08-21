@@ -10,7 +10,13 @@ export type Signal = {
 };
 export type ScannedStock = { symbol: string; name: string; firstScannedAt: string };
 export type DailyStore = {
-  date: string; signals: Signal[]; scannedStocks: ScannedStock[]; lastScanAt?: string; scanCount: number;
-  dataStatus: 'OK' | 'PARTIAL' | 'ERROR'; error?: string;
-  historicalBackfillDone?: boolean;
+  date: string;
+  signals: Signal[];
+  scannedStocks: ScannedStock[];
+  lastScanAt?: string;
+  scanCount: number;
+  dataStatus: 'OK' | 'PARTIAL' | 'ERROR';
+  error?: string;
+  historicalBatches: number[];
+  historicalBackfillDone: boolean;
 };
