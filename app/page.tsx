@@ -23,6 +23,7 @@ export default function Home() {
   }, []);
 
   const scan = useCallback(async () => {
+    if (busy) return;
     setBusy(true);
     try {
       const res = await fetch('/api/scan', { cache: 'no-store' });
@@ -32,9 +33,14 @@ export default function Home() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Scan failed');
     } finally { setBusy(false); }
-  }, []);
+  }, [busy]);
 
-  useEffect(() => { load(); const id = setInterval(() => { scan(); }, 60_000); return () => clearInterval(id); }, [load, scan]);
+  useEffect(() => {
+    load();
+    scan();
+    const id = setInterval(() => { scan(); }, 60_000);
+    return () => clearInterval(id);
+  }, [load, scan]);
 
   const buys = useMemo(() => store.signals.filter((s) => s.direction === 'BUY').length, [store.signals]);
   const sells = useMemo(() => store.signals.filter((s) => s.direction === 'SELL').length, [store.signals]);
@@ -54,7 +60,7 @@ export default function Home() {
         <div className="card wide"><span>LAST SCAN</span><strong>{time(store.lastScanAt)}</strong></div>
       </section>
 
-      <div className="banner"><span className="dot" /> <b>{message}</b><span> Window: 09:15–10:00 IST</span></div>
+      <div className="banner"><span className="dot" /> <b>{message}</b><span> Window: 09:15–10:00 IST · Auto-refresh: 60 sec</span></div>
 
       {store.error && <div className="error">DATA ERROR: {store.error}. Existing captured signals are retained.</div>}
 
