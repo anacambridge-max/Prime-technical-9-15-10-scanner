@@ -22,6 +22,10 @@ function dateDaysAgo(days: number) {
   return d.toISOString().slice(0, 10);
 }
 
+function batchCaptureTime(date: string, batch: number) {
+  return new Date(new Date(`${date}T09:15:00+05:30`).getTime() + batch * 5 * 60_000).toISOString();
+}
+
 function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function fetchCandlesWithRetry(instrumentKey: string, fromDate: string, toDate: string): Promise<Awaited<ReturnType<typeof getFiveMinuteCandles>>> {
@@ -86,7 +90,7 @@ export async function GET(request: NextRequest) {
     const fromDate = dateDaysAgo(3);
     const toDate = date;
     const batchItems = universe.slice(batch * BATCH_SIZE, Math.min((batch + 1) * BATCH_SIZE, universe.length));
-    const scanStartedAt = `${date}T03:45:00.000Z`;
+    const scanStartedAt = batchCaptureTime(date, batch);
     const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({ symbol: instrument.symbol, name: instrument.name, firstScannedAt: scanStartedAt }));
 
     const signals: Signal[] = [];
