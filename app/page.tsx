@@ -30,36 +30,32 @@ export default function Home() {
     busyRef.current = true;
     setBusy(true);
     try {
-      const afterWindow = istMinutesNow() > 600;
-      if (!afterWindow) {
-        // During market hours the scheduled GitHub workflow is the scanner.
-        // The browser only refreshes the persisted results and never launches
-        // a second 500-symbol scan cycle.
+      const minutes = istMinutesNow();
+
+      if (minutes < 555) {
         await load();
-        setMessage('Live scan is running on the scheduled scanner.');
+        setMessage('Scanner starts at 09:15 AM IST.');
         return;
       }
 
-      // After 10:00, load today's historical window in ten small batches.
-      // Each batch is 50 symbols so no single Vercel request times out.
-      for (let batch = 0; batch < 10; batch++) {
-        const latest = await fetch('/api/results', { cache: 'no-store' }).then((r) => r.ok ? r.json() : null) as Store | null;
-        if (latest?.historicalBackfillDone) {
-          setStore(latest);
-          break;
-        }
-        if (latest?.historicalBatches?.includes(batch)) {
-          setStore(latest);
-          continue;
-        }
-        const res = await fetch(`/api/scan?batch=${batch}`, { cache: 'no-store' });
-        const data = await res.json();
-        if (data.daily) setStore(data.daily);
-        if (!data.ok) throw new Error(data.error ?? 'Historical scan failed');
-        setMessage(`Loading historical 09:15–10:00 scan: batch ${batch + 1}/10`);
+      if (minutes > 600) {
+        await load();
+        setMessage("Today's 09:15–10:00 scan is complete and retained for the day.");
+        return;
       }
-      await load();
-      setMessage('Today\'s 09:15–10:00 historical scan is loaded and retained.');
+
+      // One small live batch is scanned every 60 seconds. The API automatically
+      // picks the next unscanned NIFTY 500 symbols and stores them in Redis.
+      const res = await fetch('/api/scan', { cache: 'no-store' });
+      const data = await res.json();
+      if (data.daily) setStore(data.daily);
+      if (!data.ok) throw new Error(data.error ?? 'Live scan failed');
+
+      if (data.batch && data.totalBatches) {
+        setMessage(`Live scan running: batch ${data.batch}/${data.totalBatches} · next scan in 60 sec`);
+      } else {
+        setMessage('Live scan is complete; scanned stocks are retained for the day.');
+      }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Scan failed');
     } finally {
@@ -81,7 +77,7 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="header">
-        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 CAPTURE SCANNER</h1><p>Every stock scanned during 09:15–10:00 IST is recorded for today, while every qualifying stock is retained as a captured signal until the trading day ends.</p></div>
+        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 CAPTURE SCANNER</h1><p>Every 60 seconds during 09:15–10:00 IST, the next small NIFTY 500 batch is scanned using the Prime Technical rules. Every stock that gets scanned is retained in today's list until the trading day ends.</p></div>
         <div className="actions"><span className={`status ${store.dataStatus.toLowerCase()}`}>{store.dataStatus}</span><button onClick={scan} disabled={busy}>{busy ? 'SCANNING…' : 'REFRESH SCAN'}</button></div>
       </header>
 
@@ -94,11 +90,11 @@ export default function Home() {
         <div className="card wide"><span>LAST SCAN</span><strong>{time(store.lastScanAt)}</strong></div>
       </section>
 
-      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · After 10:00 today's historical window is loaded automatically · Auto-refresh: 60 sec</span></div>
+      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · Scanner cycle: every 60 sec · Scanned list retained for day</span></div>
       {store.error && <div className="error">DATA ERROR: {store.error}. Existing daily records are retained.</div>}
 
       <section className="panel">
-        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} qualifying stock(s) captured during the window</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
+        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} qualifying stock(s) captured during the live scan window</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
         <div className="table-wrap"><table><thead><tr><th>CAPTURED</th><th>STOCK</th><th>SIDE</th><th>LEVEL</th><th>PRICE</th><th>PDH</th><th>PDL</th><th>VOL</th><th>20 EMA</th><th>REASON</th></tr></thead>
           <tbody>{store.signals.map((s) => <tr key={`${s.symbol}-${s.direction}-${s.level}`}><td>{time(s.firstSeenAt || s.confirmationTime)}</td><td className="symbol">{s.symbol}</td><td><span className={`pill ${s.direction.toLowerCase()}`}>{s.direction}</span></td><td>{s.level}</td><td>{fmt(s.price)}</td><td>{fmt(s.pdh)}</td><td>{fmt(s.pdl)}</td><td>{s.volumeMultiple.toFixed(1)}x</td><td>{fmt(s.ema20)}</td><td className="reason">{s.reason}</td></tr>)}</tbody>
         </table>{!store.signals.length && <div className="empty">No qualifying stock has been captured in today's 09:15–10:00 window yet.</div>}</div>
