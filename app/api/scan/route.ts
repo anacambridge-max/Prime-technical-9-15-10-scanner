@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getNifty500Symbols, getFiveMinuteCandles } from '@/lib/upstox';
 import { evaluateSymbol } from '@/lib/prime';
 import { mergeDaily } from '@/lib/dailyStore';
-import { Signal } from '@/lib/types';
+import { ScannedStock, Signal } from '@/lib/types';
 
 export const maxDuration = 60;
 
@@ -49,7 +49,13 @@ export async function GET(request: NextRequest) {
     const universe = await getNifty500Symbols();
     const fromDate = dateDaysAgo(7);
     const toDate = date;
+    const scanStartedAt = new Date().toISOString();
     const signals: Signal[] = [];
+    const scannedStocks: ScannedStock[] = universe.map((instrument) => ({
+      symbol: instrument.symbol,
+      name: instrument.name,
+      firstScannedAt: scanStartedAt,
+    }));
     let failures = 0;
     const concurrency = Math.max(1, Math.min(20, Number(process.env.SCAN_CONCURRENCY ?? 8)));
 
@@ -65,7 +71,13 @@ export async function GET(request: NextRequest) {
     });
 
     const status = failures === 0 ? 'OK' : signals.length ? 'PARTIAL' : 'ERROR';
-    const daily = await mergeDaily(date, signals, status, failures ? `${failures} symbols failed during this scan.` : undefined);
+    const daily = await mergeDaily(
+      date,
+      signals,
+      status,
+      failures ? `${failures} symbols failed during this scan.` : undefined,
+      scannedStocks,
+    );
 
     return NextResponse.json({ ok: true, scanning: true, universe: universe.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
