@@ -13,6 +13,15 @@ type Store = { date: string; signals: Signal[]; scannedStocks: ScannedStock[]; l
 const fmt = (v: number) => v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const time = (v?: string) => v ? new Date(v).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
 
+function istMinutesNow() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+  return hour * 60 + minute;
+}
+
 export default function Home() {
   const [store, setStore] = useState<Store>({ date: '', signals: [], scannedStocks: [], scanCount: 0, dataStatus: 'OK' });
   const [busy, setBusy] = useState(false);
@@ -29,10 +38,15 @@ export default function Home() {
     busyRef.current = true;
     setBusy(true);
     try {
-      const res = await fetch('/api/scan', { cache: 'no-store' });
+      // During 09:15–10:00 use the live scan. After 10:00 automatically
+      // run the historical 09:15–10:00 backfill so today's list is still shown.
+      const force = istMinutesNow() > 600 ? '?force=1' : '';
+      const res = await fetch(`/api/scan${force}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.daily) setStore(data.daily);
-      setMessage(data.message ?? (data.ok ? 'Scan completed — qualifying stocks captured.' : data.error ?? 'Scan failed'));
+      setMessage(data.historicalWindow
+        ? 'Today\'s 09:15–10:00 historical scan loaded.'
+        : (data.message ?? (data.ok ? 'Scan completed — qualifying stocks captured.' : data.error ?? 'Scan failed')));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Scan failed');
     } finally {
@@ -67,7 +81,7 @@ export default function Home() {
         <div className="card wide"><span>LAST SCAN</span><strong>{time(store.lastScanAt)}</strong></div>
       </section>
 
-      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · Daily lists retained after 10:00 · Auto-refresh: 60 sec</span></div>
+      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · After 10:00 today's historical window is loaded automatically · Auto-refresh: 60 sec</span></div>
 
       {store.error && <div className="error">DATA ERROR: {store.error}. Existing daily records are retained.</div>}
 
@@ -79,7 +93,7 @@ export default function Home() {
               <td>{time(s.firstSeenAt || s.confirmationTime)}</td><td className="symbol">{s.symbol}</td><td><span className={`pill ${s.direction.toLowerCase()}`}>{s.direction}</span></td><td>{s.level}</td><td>{fmt(s.price)}</td><td>{fmt(s.pdh)}</td><td>{fmt(s.pdl)}</td><td>{s.volumeMultiple.toFixed(1)}x</td><td>{fmt(s.ema20)}</td><td className="reason">{s.reason}</td>
             </tr>)}</tbody>
           </table>
-          {!store.signals.length && <div className="empty">No qualifying stock has been captured during today's 09:15–10:00 window yet.</div>}
+          {!store.signals.length && <div className="empty">No qualifying stock was found in today's 09:15–10:00 window.</div>}
         </div>
       </section>
 
@@ -91,7 +105,7 @@ export default function Home() {
               <td>{i + 1}</td><td className="symbol">{s.symbol}</td><td>{s.name}</td><td>{time(s.firstScannedAt)}</td>
             </tr>)}</tbody>
           </table>
-          {!store.scannedStocks.length && <div className="empty">No stocks have been scanned yet today. The list will populate during 09:15–10:00 IST.</div>}
+          {!store.scannedStocks.length && <div className="empty">Today's scanned-stock list has not been loaded yet.</div>}
         </div>
       </section>
 
