@@ -1,24 +1,13 @@
 name: Market Scan
 
 on:
-  schedule:
-    # 09:15–10:00 IST = 03:45–04:30 UTC, weekdays.
-    - cron: '45-59/5 3 * * 1-5'
-    - cron: '0-30/5 4 * * 1-5'
   workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger one scanner batch for this 5-minute slot
+      - name: Trigger one live scanner cycle
         run: |
-          H=$(TZ=Asia/Kolkata date +%H)
-          M=$(TZ=Asia/Kolkata date +%M)
-          MIN=$((10#$H * 60 + 10#$M))
-          BATCH=$(( (MIN - 555) / 5 ))
-          if [ "$BATCH" -lt 0 ]; then BATCH=0; fi
-          if [ "$BATCH" -gt 9 ]; then BATCH=9; fi
-          echo "IST=$H:$M batch=$BATCH"
           curl --fail-with-body --retry 2 --max-time 55 \
-            "https://prime-technical-9-15-10-scanner2.vercel.app/api/scan?batch=$BATCH"
+            "https://prime-technical-9-15-10-scanner2.vercel.app/api/scan?force=1"
