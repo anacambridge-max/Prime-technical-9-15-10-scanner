@@ -8,19 +8,26 @@ const redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_RE
 const memory = new Map<string, DailyStore>();
 export function storeKey(date: string) { return `prime:daily:${date}`; }
 
-const emptyStore = (date: string): DailyStore => ({ date, signals: [], scannedStocks: [], scanCount: 0, dataStatus: 'OK' });
+const emptyStore = (date: string): DailyStore => ({ date, signals: [], scannedStocks: [], scanCount: 0, dataStatus: 'OK', historicalBackfillDone: false });
 
 export async function getDaily(date: string): Promise<DailyStore> {
   if (redis) {
     const value = await redis.get<DailyStore>(storeKey(date));
     if (!value) return emptyStore(date);
-    return { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [] };
+    return { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [], historicalBackfillDone: value.historicalBackfillDone ?? false };
   }
   const value = memory.get(date);
-  return value ? { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [] } : emptyStore(date);
+  return value ? { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [], historicalBackfillDone: value.historicalBackfillDone ?? false } : emptyStore(date);
 }
 
-export async function mergeDaily(date: string, incoming: Signal[], status: DailyStore['dataStatus'], error?: string, scanned: ScannedStock[] = []) {
+export async function mergeDaily(
+  date: string,
+  incoming: Signal[],
+  status: DailyStore['dataStatus'],
+  error?: string,
+  scanned: ScannedStock[] = [],
+  historicalBackfillDone?: boolean,
+) {
   const current = await getDaily(date);
   const signalMap = new Map(current.signals.map((s) => [`${s.symbol}:${s.direction}:${s.level}`, s]));
   for (const signal of incoming) {
@@ -39,6 +46,7 @@ export async function mergeDaily(date: string, incoming: Signal[], status: Daily
     scanCount: current.scanCount + 1,
     dataStatus: status,
     error,
+    historicalBackfillDone: historicalBackfillDone ?? current.historicalBackfillDone ?? false,
   };
   if (redis) await redis.set(storeKey(date), next);
   else memory.set(date, next);
