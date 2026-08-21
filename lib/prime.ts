@@ -3,7 +3,23 @@ import { emaAt } from './indicators';
 import { pdhPdl, tradingDate } from './levels';
 import { volumeMultiple } from './volume';
 
-export function evaluateSymbol(symbol: string, name: string, candles: Candle[], now = new Date()): Signal | null {
+function minuteOfDayIST(timestamp: string): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(timestamp));
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+export function evaluateSymbol(
+  symbol: string,
+  name: string,
+  candles: Candle[],
+  now = new Date(),
+  captureStartMinutes = 0,
+  captureEndMinutes = 1439,
+): Signal | null {
   const istDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
   const levels = pdhPdl(candles, istDate);
   if (!levels) return null;
@@ -21,6 +37,11 @@ export function evaluateSymbol(symbol: string, name: string, candles: Candle[], 
     const follow = completed[i + 1];
     const followIndex = candles.indexOf(follow);
     if (followIndex <= candleIndex) continue;
+
+    // Only capture confirmations whose follow-through candle occurred
+    // inside the requested capture window (09:15–10:00 for this scanner).
+    const confirmationMinute = minuteOfDayIST(follow.timestamp);
+    if (confirmationMinute < captureStartMinutes || confirmationMinute > captureEndMinutes) continue;
 
     if (candle.close > levels.pdh && candle.high > levels.pdh && candle.close > ema20 && vol.multiple >= 2) {
       if (follow.close <= levels.pdh || follow.low <= levels.pdh) continue;
