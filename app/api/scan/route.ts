@@ -59,6 +59,7 @@ export async function GET(_request: NextRequest) {
   const minutes = hour * 60 + minute;
   const existing = await getDaily(date);
 
+  // F&O-only live scanner: 09:15–10:00 IST. After 10:00 the daily result is read-only.
   if (minutes < START_MINUTES) {
     return NextResponse.json({ ok: true, scanning: false, message: 'Scanner starts at 09:15 IST.', date, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
   }
@@ -75,13 +76,12 @@ export async function GET(_request: NextRequest) {
 
   try {
     const universe = await getFnoStocks();
-    if (!universe.length) throw new Error('No NSE stock-futures instruments found in Upstox instruments data');
+    if (!universe.length) throw new Error('No NSE F&O stocks found in Upstox instruments data');
 
     const totalBatches = Math.ceil(universe.length / BATCH_SIZE);
     const batch = existing.scanCount % totalBatches;
     const batchItems = universe.slice(batch * BATCH_SIZE, Math.min((batch + 1) * BATCH_SIZE, universe.length));
     const fromDate = dateDaysAgo(3);
-    const toDate = date;
     const scanStartedAt = now.toISOString();
 
     const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({
@@ -96,7 +96,7 @@ export async function GET(_request: NextRequest) {
 
     await mapLimit(batchItems, concurrency, async (instrument) => {
       try {
-        const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, toDate);
+        const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, date);
         const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, now, START_MINUTES, END_MINUTES);
         if (signal) signals.push(signal);
       } catch { failures += 1; }
@@ -113,7 +113,7 @@ export async function GET(_request: NextRequest) {
       { incrementScanCount: true },
     );
 
-    return NextResponse.json({ ok: true, scanning: true, window: '09:15–10:00 IST', universe: universe.length, batch: batch + 1, totalBatches, batchSize: batchItems.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ok: true, scanning: true, window: '09:15–10:00 IST', universe: 'NSE F&O', universeSize: universe.length, batch: batch + 1, totalBatches, batchSize: batchItems.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
     const daily = await mergeDaily(date, [], 'ERROR', message, [], { incrementScanCount: false });
