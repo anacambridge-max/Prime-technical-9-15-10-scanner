@@ -49,7 +49,11 @@ export async function GET(request: NextRequest) {
     const universe = await getNifty500Symbols();
     const fromDate = dateDaysAgo(7);
     const toDate = date;
-    const scanStartedAt = new Date().toISOString();
+    // For a historical/manual run after 10:00, represent the original
+    // 09:15 start of the capture window instead of the time the backfill runs.
+    const scanStartedAt = force
+      ? `${date}T03:45:00.000Z`
+      : new Date().toISOString();
     const signals: Signal[] = [];
     const scannedStocks: ScannedStock[] = universe.map((instrument) => ({
       symbol: instrument.symbol,
@@ -62,7 +66,16 @@ export async function GET(request: NextRequest) {
     await mapLimit(universe, concurrency, async (instrument) => {
       try {
         const candles = await getFiveMinuteCandles(instrument.instrumentKey, fromDate, toDate);
-        const signal = evaluateSymbol(instrument.symbol, instrument.name, candles);
+        // Normal scans and manual backfills use the same Prime Technical
+        // rules, but force=1 restricts qualifying confirmations to 09:15–10:00.
+        const signal = evaluateSymbol(
+          instrument.symbol,
+          instrument.name,
+          candles,
+          new Date(`${date}T10:00:00+05:30`),
+          555,
+          600,
+        );
         if (signal) signals.push(signal);
       } catch {
         failures += 1;
@@ -79,7 +92,14 @@ export async function GET(request: NextRequest) {
       scannedStocks,
     );
 
-    return NextResponse.json({ ok: true, scanning: true, universe: universe.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({
+      ok: true,
+      scanning: true,
+      historicalWindow: force ? '09:15–10:00 IST' : undefined,
+      universe: universe.length,
+      failures,
+      daily,
+    }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
     const daily = await mergeDaily(date, [], 'ERROR', message);
