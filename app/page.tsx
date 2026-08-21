@@ -38,23 +38,23 @@ export default function Home() {
         return;
       }
 
-      if (minutes > 600) {
+      if (minutes >= 600) {
         await load();
-        setMessage("Today's 09:15–10:00 scan is complete and retained for the day.");
+        setMessage("09:15–10:00 scan is closed. Today's F&O scanned and captured stocks are retained for the day.");
         return;
       }
 
-      // One small live batch is scanned every 60 seconds. The API automatically
-      // picks the next unscanned NIFTY 500 symbols and stores them in Redis.
+      // One live F&O batch is scanned every 60 seconds. The API rotates through
+      // the F&O universe so stocks are rechecked repeatedly during the window.
       const res = await fetch('/api/scan', { cache: 'no-store' });
       const data = await res.json();
       if (data.daily) setStore(data.daily);
       if (!data.ok) throw new Error(data.error ?? 'Live scan failed');
 
       if (data.batch && data.totalBatches) {
-        setMessage(`Live scan running: batch ${data.batch}/${data.totalBatches} · next scan in 60 sec`);
+        setMessage(`F&O live scan: batch ${data.batch}/${data.totalBatches} · next scan in 60 sec`);
       } else {
-        setMessage('Live scan is complete; scanned stocks are retained for the day.');
+        setMessage('F&O live scan is running.');
       }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Scan failed');
@@ -77,12 +77,12 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="header">
-        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 CAPTURE SCANNER</h1><p>Every 60 seconds during 09:15–10:00 IST, the next small NIFTY 500 batch is scanned using the Prime Technical rules. Every stock that gets scanned is retained in today's list until the trading day ends.</p></div>
+        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 F&O CAPTURE SCANNER</h1><p>F&O stocks are checked live every 60 seconds during 09:15–10:00 IST. Stocks that meet the Prime Technical condition appear in the scanner immediately and remain saved for the day.</p></div>
         <div className="actions"><span className={`status ${store.dataStatus.toLowerCase()}`}>{store.dataStatus}</span><button onClick={scan} disabled={busy}>{busy ? 'SCANNING…' : 'REFRESH SCAN'}</button></div>
       </header>
 
       <section className="cards">
-        <div className="card"><span>SCANNED TODAY</span><strong>{store.scannedStocks.length}</strong></div>
+        <div className="card"><span>F&O STOCKS SCANNED</span><strong>{store.scannedStocks.length}</strong></div>
         <div className="card"><span>CAPTURED TODAY</span><strong>{store.signals.length}</strong></div>
         <div className="card buy"><span>BUY</span><strong>{buys}</strong></div>
         <div className="card sell"><span>SELL</span><strong>{sells}</strong></div>
@@ -90,23 +90,23 @@ export default function Home() {
         <div className="card wide"><span>LAST SCAN</span><strong>{time(store.lastScanAt)}</strong></div>
       </section>
 
-      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · Scanner cycle: every 60 sec · Scanned list retained for day</span></div>
+      <div className="banner"><span className="dot" /> <b>{message}</b><span> F&O only · 09:15–10:00 IST · every 60 sec · list locked after 10:00</span></div>
       {store.error && <div className="error">DATA ERROR: {store.error}. Existing daily records are retained.</div>}
 
       <section className="panel">
-        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} qualifying stock(s) captured during the live scan window</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
+        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} qualifying F&O stock(s) captured during 09:15–10:00</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
         <div className="table-wrap"><table><thead><tr><th>CAPTURED</th><th>STOCK</th><th>SIDE</th><th>LEVEL</th><th>PRICE</th><th>PDH</th><th>PDL</th><th>VOL</th><th>20 EMA</th><th>REASON</th></tr></thead>
           <tbody>{store.signals.map((s) => <tr key={`${s.symbol}-${s.direction}-${s.level}`}><td>{time(s.firstSeenAt || s.confirmationTime)}</td><td className="symbol">{s.symbol}</td><td><span className={`pill ${s.direction.toLowerCase()}`}>{s.direction}</span></td><td>{s.level}</td><td>{fmt(s.price)}</td><td>{fmt(s.pdh)}</td><td>{fmt(s.pdl)}</td><td>{s.volumeMultiple.toFixed(1)}x</td><td>{fmt(s.ema20)}</td><td className="reason">{s.reason}</td></tr>)}</tbody>
-        </table>{!store.signals.length && <div className="empty">No qualifying stock has been captured in today's 09:15–10:00 window yet.</div>}</div>
+        </table>{!store.signals.length && <div className="empty">No qualifying F&O stock has been captured in today's 09:15–10:00 window yet.</div>}</div>
       </section>
 
       <section className="panel">
-        <div className="panel-head"><div><h2>TODAY'S SCANNED STOCKS</h2><p>{store.date || '—'} · {store.scannedStocks.length} stock(s) scanned during the 09:15–10:00 window</p></div><span className="retained">● RETAINED FOR DAY</span></div>
+        <div className="panel-head"><div><h2>TODAY'S F&O STOCKS SCANNED</h2><p>{store.date || '—'} · {store.scannedStocks.length} F&O stock(s) checked during the 09:15–10:00 window</p></div><span className="retained">● RETAINED FOR DAY</span></div>
         <div className="table-wrap"><table><thead><tr><th>#</th><th>STOCK</th><th>NAME</th><th>FIRST SCANNED</th></tr></thead>
           <tbody>{store.scannedStocks.map((s, i) => <tr key={s.symbol}><td>{i + 1}</td><td className="symbol">{s.symbol}</td><td>{s.name}</td><td>{time(s.firstScannedAt)}</td></tr>)}</tbody>
-        </table>{!store.scannedStocks.length && <div className="empty">Today's scanned-stock list has not been loaded yet.</div>}</div>
+        </table>{!store.scannedStocks.length && <div className="empty">Today's F&O scanned-stock list has not started yet.</div>}</div>
       </section>
-      <footer>Scanner only · No orders or trades are executed · Today's scanned and captured lists remain stored for the day · Upstox credentials remain server-side</footer>
+      <footer>Scanner only · No orders or trades are executed · Today's F&O scanned and captured lists remain stored for the day · Upstox credentials remain server-side</footer>
     </main>
   );
 }
