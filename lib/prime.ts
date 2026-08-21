@@ -24,7 +24,14 @@ export function evaluateSymbol(
   const levels = pdhPdl(candles, istDate);
   if (!levels) return null;
 
-  const today = candles.filter((c) => tradingDate(c.timestamp) === istDate);
+  // Historical backfills can be executed after the market has closed. Never
+  // allow candles after the requested capture window to participate in the
+  // window scan; otherwise a post-market run could accidentally evaluate a
+  // later part of today's session as part of the 09:15–10:00 scan.
+  const today = candles.filter((c) =>
+    tradingDate(c.timestamp) === istDate &&
+    minuteOfDayIST(c.timestamp) <= captureEndMinutes,
+  );
   const completed = today.length > 1 ? today.slice(0, -1) : [];
   if (completed.length < 2) return null;
 
@@ -38,8 +45,8 @@ export function evaluateSymbol(
     const followIndex = candles.indexOf(follow);
     if (followIndex <= candleIndex) continue;
 
-    // Only capture confirmations whose follow-through candle occurred
-    // inside the requested capture window (09:15–10:00 for this scanner).
+    // The confirmation candle itself must occur inside the requested
+    // 09:15–10:00 IST capture window.
     const confirmationMinute = minuteOfDayIST(follow.timestamp);
     if (confirmationMinute < captureStartMinutes || confirmationMinute > captureEndMinutes) continue;
 
@@ -47,7 +54,9 @@ export function evaluateSymbol(
       if (follow.close <= levels.pdh || follow.low <= levels.pdh) continue;
       return {
         date: istDate, symbol, name, direction: 'BUY', level: 'PDH', status: 'CONFIRMED',
-        firstSeenAt: new Date().toISOString(), confirmationTime: follow.timestamp, price: follow.close,
+        // For both live scans and historical backfills, this should represent
+        // the actual signal/confirmation time, not the time the backfill ran.
+        firstSeenAt: follow.timestamp, confirmationTime: follow.timestamp, price: follow.close,
         pdh: levels.pdh, pdl: levels.pdl, breakoutCandle: candle, volumeMultiple: vol.multiple,
         referenceVolume: vol.reference, ema20, followThroughCandle: follow,
         reason: `PDH breakout + bullish follow-through + ${vol.multiple.toFixed(1)}X volume + price above 20 EMA`,
@@ -58,7 +67,7 @@ export function evaluateSymbol(
       if (follow.close >= levels.pdl || follow.high >= levels.pdl) continue;
       return {
         date: istDate, symbol, name, direction: 'SELL', level: 'PDL', status: 'CONFIRMED',
-        firstSeenAt: new Date().toISOString(), confirmationTime: follow.timestamp, price: follow.close,
+        firstSeenAt: follow.timestamp, confirmationTime: follow.timestamp, price: follow.close,
         pdh: levels.pdh, pdl: levels.pdl, breakoutCandle: candle, volumeMultiple: vol.multiple,
         referenceVolume: vol.reference, ema20, followThroughCandle: follow,
         reason: `PDL breakdown + bearish follow-through + ${vol.multiple.toFixed(1)}X volume + price below 20 EMA`,
