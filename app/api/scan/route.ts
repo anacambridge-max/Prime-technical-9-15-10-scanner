@@ -84,12 +84,10 @@ export async function GET(_request: NextRequest) {
     const fromDate = dateDaysAgo(3);
     const scanStartedAt = now.toISOString();
 
-    const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({
-      symbol: instrument.symbol,
-      name: instrument.name,
-      firstScannedAt: scanStartedAt,
-    }));
-
+    // Only count a stock in the scanned list after its market-data request
+    // actually succeeds. Failed Upstox requests are reported separately and
+    // must not make the dashboard claim that the stock was successfully scanned.
+    const scannedStocks: ScannedStock[] = [];
     const signals: Signal[] = [];
     let failures = 0;
     const concurrency = Math.max(1, Math.min(5, Number(process.env.SCAN_CONCURRENCY ?? 5)));
@@ -97,9 +95,16 @@ export async function GET(_request: NextRequest) {
     await mapLimit(batchItems, concurrency, async (instrument) => {
       try {
         const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, date);
+        scannedStocks.push({
+          symbol: instrument.symbol,
+          name: instrument.name,
+          firstScannedAt: scanStartedAt,
+        });
         const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, now, START_MINUTES, END_MINUTES);
         if (signal) signals.push(signal);
-      } catch { failures += 1; }
+      } catch {
+        failures += 1;
+      }
       return null;
     });
 
@@ -113,7 +118,7 @@ export async function GET(_request: NextRequest) {
       { incrementScanCount: true },
     );
 
-    return NextResponse.json({ ok: true, scanning: true, window: '09:15–10:00 IST', universe: 'NSE F&O', universeSize: universe.length, batch: batch + 1, totalBatches, batchSize: batchItems.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ok: true, scanning: true, window: '09:15–10:00 IST', universe: 'NSE F&O', universeSize: universe.length, batch: batch + 1, totalBatches, batchSize: batchItems.length, scannedSuccessfully: scannedStocks.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
     const daily = await mergeDaily(date, [], 'ERROR', message, [], { incrementScanCount: false });
