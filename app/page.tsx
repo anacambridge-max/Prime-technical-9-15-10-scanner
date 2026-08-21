@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type Signal = {
   symbol: string; name: string; direction: 'BUY' | 'SELL'; level: 'PDH' | 'PDL';
@@ -15,6 +15,7 @@ const time = (v?: string) => v ? new Date(v).toLocaleTimeString('en-IN', { timeZ
 export default function Home() {
   const [store, setStore] = useState<Store>({ date: '', signals: [], scanCount: 0, dataStatus: 'OK' });
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [message, setMessage] = useState('Waiting for scanner');
 
   const load = useCallback(async () => {
@@ -23,7 +24,8 @@ export default function Home() {
   }, []);
 
   const scan = useCallback(async () => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const res = await fetch('/api/scan', { cache: 'no-store' });
@@ -32,13 +34,16 @@ export default function Home() {
       setMessage(data.message ?? (data.ok ? 'Scan completed' : data.error ?? 'Scan failed'));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Scan failed');
-    } finally { setBusy(false); }
-  }, [busy]);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     load();
     scan();
-    const id = setInterval(() => { scan(); }, 60_000);
+    const id = setInterval(scan, 60_000);
     return () => clearInterval(id);
   }, [load, scan]);
 
