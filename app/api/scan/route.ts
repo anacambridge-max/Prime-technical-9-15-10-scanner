@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNifty500Symbols, getFiveMinuteCandles } from '@/lib/upstox';
 import { evaluateSymbol } from '@/lib/prime';
-import { mergeDaily } from '@/lib/dailyStore';
+import { getDaily, mergeDaily } from '@/lib/dailyStore';
 import { ScannedStock, Signal } from '@/lib/types';
 
 export const maxDuration = 60;
@@ -23,6 +23,24 @@ function dateDaysAgo(days: number) {
   return d.toISOString().slice(0, 10);
 }
 
+function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function fetchCandlesWithRetry(instrumentKey: string, fromDate: string, toDate: string): Promise<Awaited<ReturnType<typeof getFiveMinuteCandles>>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await getFiveMinuteCandles(instrumentKey, fromDate, toDate);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /Historical candles (429|500|502|503|504)/.test(message);
+      if (!retryable || attempt === 2) throw error;
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Historical candle request failed');
+}
+
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
   const results: R[] = [];
   let cursor = 0;
@@ -40,20 +58,36 @@ export async function GET(request: NextRequest) {
   const { hour, minute, date } = istParts();
   const minutes = hour * 60 + minute;
   const force = request.nextUrl.searchParams.get('force') === '1';
+  const afterWindow = minutes > 600;
+  const beforeWindow = minutes < 555;
 
-  if (!force && (minutes < 555 || minutes > 600)) {
-    return NextResponse.json({ ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date });
+  // Outside the capture window, do not repeatedly rescan 500 symbols every minute.
+  // After 10:00, the historical backfill is performed only once for the day.
+  const existing = await getDaily(date);
+  if (!force && afterWindow && existing.historicalBackfillDone) {
+    return NextResponse.json({
+      ok: true,
+      scanning: false,
+      historicalWindow: '09:15–10:00 IST',
+      message: "Today's 09:15–10:00 historical scan is already loaded; daily results are retained.",
+      daily: existing,
+    }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  if (!force && beforeWindow) {
+    return NextResponse.json({ ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date, daily: existing });
   }
 
   try {
     const universe = await getNifty500Symbols();
-    const fromDate = dateDaysAgo(7);
+    // Only 3 days are required for PDH/PDL plus enough 5-minute bars for EMA20/volume.
+    // This keeps each historical request smaller while still covering the strategy inputs.
+    const fromDate = dateDaysAgo(3);
     const toDate = date;
-    // For a historical/manual run after 10:00, represent the original
-    // 09:15 start of the capture window instead of the time the backfill runs.
-    const scanStartedAt = force
+    const scanStartedAt = force || afterWindow
       ? `${date}T03:45:00.000Z`
       : new Date().toISOString();
+
     const signals: Signal[] = [];
     const scannedStocks: ScannedStock[] = universe.map((instrument) => ({
       symbol: instrument.symbol,
@@ -61,13 +95,14 @@ export async function GET(request: NextRequest) {
       firstScannedAt: scanStartedAt,
     }));
     let failures = 0;
-    const concurrency = Math.max(1, Math.min(20, Number(process.env.SCAN_CONCURRENCY ?? 8)));
+
+    // Keep request concurrency conservative to avoid Upstox 429s. Upstox currently
+    // documents 50 req/sec, 500/min and 2000/30min for standard APIs.
+    const concurrency = Math.max(1, Math.min(6, Number(process.env.SCAN_CONCURRENCY ?? 6)));
 
     await mapLimit(universe, concurrency, async (instrument) => {
       try {
-        const candles = await getFiveMinuteCandles(instrument.instrumentKey, fromDate, toDate);
-        // Normal scans and manual backfills use the same Prime Technical
-        // rules, but force=1 restricts qualifying confirmations to 09:15–10:00.
+        const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, toDate);
         const signal = evaluateSymbol(
           instrument.symbol,
           instrument.name,
@@ -90,19 +125,20 @@ export async function GET(request: NextRequest) {
       status,
       failures ? `${failures} symbols failed during this scan.` : undefined,
       scannedStocks,
+      afterWindow || force ? true : existing.historicalBackfillDone,
     );
 
     return NextResponse.json({
       ok: true,
-      scanning: true,
-      historicalWindow: force ? '09:15–10:00 IST' : undefined,
+      scanning: !afterWindow,
+      historicalWindow: force || afterWindow ? '09:15–10:00 IST' : undefined,
       universe: universe.length,
       failures,
       daily,
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
-    const daily = await mergeDaily(date, [], 'ERROR', message);
-    return NextResponse.json({ ok: false, scanning: true, daily, error: message }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    const daily = await mergeDaily(date, [], 'ERROR', message, [], afterWindow || force ? true : existing.historicalBackfillDone);
+    return NextResponse.json({ ok: false, scanning: !afterWindow, daily, error: message }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
 }
