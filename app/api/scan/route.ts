@@ -51,8 +51,9 @@ export async function GET(request: NextRequest) {
     const toDate = date;
     const signals: Signal[] = [];
     let failures = 0;
+    const concurrency = Math.max(1, Math.min(20, Number(process.env.SCAN_CONCURRENCY ?? 8)));
 
-    await mapLimit(universe, 20, async (instrument) => {
+    await mapLimit(universe, concurrency, async (instrument) => {
       try {
         const candles = await getFiveMinuteCandles(instrument.instrumentKey, fromDate, toDate);
         const signal = evaluateSymbol(instrument.symbol, instrument.name, candles);
