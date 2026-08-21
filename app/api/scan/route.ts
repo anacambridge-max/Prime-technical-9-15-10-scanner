@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getNifty500Symbols, getFiveMinuteCandles } from '@/lib/upstox';
+import { getFnoStocks, getFiveMinuteCandles } from '@/lib/upstox';
 import { evaluateSymbol } from '@/lib/prime';
 import { getDaily, mergeDaily } from '@/lib/dailyStore';
 import { ScannedStock, Signal } from '@/lib/types';
 
 export const maxDuration = 60;
-const BATCH_SIZE = 12;
+const BATCH_SIZE = 25;
+const START_MINUTES = 555;
+const END_MINUTES = 600;
 
 function istParts() {
   const now = new Date();
@@ -52,77 +54,50 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const { hour, minute, date, now } = istParts();
   const minutes = hour * 60 + minute;
-  const force = request.nextUrl.searchParams.get('force') === '1';
-  const batchParam = request.nextUrl.searchParams.get('batch');
-  const beforeWindow = minutes < 555;
-  const afterWindow = minutes > 600;
   const existing = await getDaily(date);
 
-  if (!force && beforeWindow) {
-    return NextResponse.json({ ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
+  if (minutes < START_MINUTES) {
+    return NextResponse.json({ ok: true, scanning: false, message: 'Scanner starts at 09:15 IST.', date, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
-  if (afterWindow) {
+  if (minutes >= END_MINUTES) {
     return NextResponse.json({
       ok: true,
       scanning: false,
-      historicalWindow: '09:15–10:00 IST',
-      message: "Today's 09:15–10:00 scan is complete; scanned stocks are retained for the day.",
+      lockedForDay: true,
+      message: "09:15–10:00 scan is closed. Today's scanned and captured stocks are retained for the day.",
       daily: existing,
     }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   try {
-    const universe = await getNifty500Symbols();
+    const universe = await getFnoStocks();
+    if (!universe.length) throw new Error('No NSE stock-futures instruments found in Upstox instruments data');
+
     const totalBatches = Math.ceil(universe.length / BATCH_SIZE);
-
-    if (existing.historicalBatches.length >= totalBatches) {
-      return NextResponse.json({
-        ok: true,
-        scanning: false,
-        historicalWindow: '09:15–10:00 IST',
-        message: "Today's full NIFTY 500 scan is complete; results are retained for the day.",
-        batch: totalBatches,
-        totalBatches,
-        universe: universe.length,
-        failures: 0,
-        daily: existing,
-      }, { headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    let batch: number;
-    if (batchParam != null) {
-      const parsed = Number(batchParam);
-      batch = Number.isFinite(parsed) ? Math.max(0, Math.min(totalBatches - 1, Math.floor(parsed))) : 0;
-    } else {
-      batch = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i)) ?? 0;
-    }
-
-    if (existing.historicalBatches.includes(batch)) {
-      const nextMissing = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i));
-      if (nextMissing == null) {
-        return NextResponse.json({ ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
-      }
-      batch = nextMissing;
-    }
-
+    const batch = existing.scanCount % totalBatches;
+    const batchItems = universe.slice(batch * BATCH_SIZE, Math.min((batch + 1) * BATCH_SIZE, universe.length));
     const fromDate = dateDaysAgo(3);
     const toDate = date;
-    const batchItems = universe.slice(batch * BATCH_SIZE, Math.min((batch + 1) * BATCH_SIZE, universe.length));
     const scanStartedAt = now.toISOString();
-    const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({ symbol: instrument.symbol, name: instrument.name, firstScannedAt: scanStartedAt }));
+
+    const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({
+      symbol: instrument.symbol,
+      name: instrument.name,
+      firstScannedAt: scanStartedAt,
+    }));
 
     const signals: Signal[] = [];
     let failures = 0;
-    const concurrency = Math.max(1, Math.min(4, Number(process.env.SCAN_CONCURRENCY ?? 4)));
+    const concurrency = Math.max(1, Math.min(5, Number(process.env.SCAN_CONCURRENCY ?? 5)));
 
     await mapLimit(batchItems, concurrency, async (instrument) => {
       try {
         const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, toDate);
-        const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, now, 555, 600);
+        const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, now, START_MINUTES, END_MINUTES);
         if (signal) signals.push(signal);
       } catch { failures += 1; }
       return null;
@@ -133,12 +108,12 @@ export async function GET(request: NextRequest) {
       date,
       signals,
       status,
-      failures ? `${failures} symbols failed in batch ${batch + 1}/${totalBatches}.` : undefined,
+      failures ? `${failures} F&O stocks failed in this live batch.` : undefined,
       scannedStocks,
-      { batch, totalBatches, incrementScanCount: true },
+      { incrementScanCount: true },
     );
 
-    return NextResponse.json({ ok: true, scanning: true, historicalWindow: '09:15–10:00 IST', batch: batch + 1, totalBatches, batchSize: batchItems.length, universe: universe.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ok: true, scanning: true, window: '09:15–10:00 IST', universe: universe.length, batch: batch + 1, totalBatches, batchSize: batchItems.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
     const daily = await mergeDaily(date, [], 'ERROR', message, [], { incrementScanCount: false });
