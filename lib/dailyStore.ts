@@ -14,31 +14,23 @@ export async function getDaily(date: string): Promise<DailyStore> {
   if (redis) {
     const value = await redis.get<DailyStore>(storeKey(date));
     if (!value) return emptyStore(date);
-    return { ...value, scannedStocks: value.scannedStocks ?? [] };
+    return { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [] };
   }
   const value = memory.get(date);
-  return value ? { ...value, scannedStocks: value.scannedStocks ?? [] } : emptyStore(date);
+  return value ? { ...value, signals: value.signals ?? [], scannedStocks: value.scannedStocks ?? [] } : emptyStore(date);
 }
 
-export async function mergeDaily(
-  date: string,
-  incoming: Signal[],
-  status: DailyStore['dataStatus'],
-  error?: string,
-  scanned: ScannedStock[] = [],
-) {
+export async function mergeDaily(date: string, incoming: Signal[], status: DailyStore['dataStatus'], error?: string, scanned: ScannedStock[] = []) {
   const current = await getDaily(date);
   const signalMap = new Map(current.signals.map((s) => [`${s.symbol}:${s.direction}:${s.level}`, s]));
   for (const signal of incoming) {
     const key = `${signal.symbol}:${signal.direction}:${signal.level}`;
     if (!signalMap.has(key)) signalMap.set(key, signal);
   }
-
   const scannedMap = new Map(current.scannedStocks.map((s) => [s.symbol, s]));
   for (const stock of scanned) {
     if (!scannedMap.has(stock.symbol)) scannedMap.set(stock.symbol, stock);
   }
-
   const next: DailyStore = {
     date,
     signals: [...signalMap.values()].sort((a, b) => (a.firstSeenAt || a.confirmationTime).localeCompare(b.firstSeenAt || b.confirmationTime)),
