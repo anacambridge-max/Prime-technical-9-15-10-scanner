@@ -11,7 +11,14 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger scanner
+      - name: Trigger one scanner batch for this 5-minute slot
         run: |
-          curl --fail-with-body --retry 2 --max-time 60 \
-            'https://prime-technical-9-15-10-scanner2.vercel.app/api/scan'
+          H=$(TZ=Asia/Kolkata date +%H)
+          M=$(TZ=Asia/Kolkata date +%M)
+          MIN=$((10#$H * 60 + 10#$M))
+          BATCH=$(( (MIN - 555) / 5 ))
+          if [ "$BATCH" -lt 0 ]; then BATCH=0; fi
+          if [ "$BATCH" -gt 9 ]; then BATCH=9; fi
+          echo "IST=$H:$M batch=$BATCH"
+          curl --fail-with-body --retry 2 --max-time 55 \
+            "https://prime-technical-9-15-10-scanner2.vercel.app/api/scan?batch=$BATCH"
