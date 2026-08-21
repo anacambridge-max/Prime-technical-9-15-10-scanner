@@ -7,13 +7,14 @@ type Signal = {
   status: string; firstSeenAt?: string; confirmationTime: string; price: number; pdh: number; pdl: number;
   volumeMultiple: number; ema20: number; reason: string;
 };
-type Store = { date: string; signals: Signal[]; lastScanAt?: string; scanCount: number; dataStatus: string; error?: string };
+type ScannedStock = { symbol: string; name: string; firstScannedAt: string };
+type Store = { date: string; signals: Signal[]; scannedStocks: ScannedStock[]; lastScanAt?: string; scanCount: number; dataStatus: string; error?: string };
 
 const fmt = (v: number) => v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const time = (v?: string) => v ? new Date(v).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
 
 export default function Home() {
-  const [store, setStore] = useState<Store>({ date: '', signals: [], scanCount: 0, dataStatus: 'OK' });
+  const [store, setStore] = useState<Store>({ date: '', signals: [], scannedStocks: [], scanCount: 0, dataStatus: 'OK' });
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [message, setMessage] = useState('Waiting for scanner');
@@ -53,11 +54,12 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="header">
-        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 CAPTURE SCANNER</h1><p>Every qualifying stock captured during 09:15–10:00 IST is retained in today's results until the trading day ends.</p></div>
+        <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 CAPTURE SCANNER</h1><p>Every stock scanned during 09:15–10:00 IST is recorded for today, while every qualifying stock is retained as a captured signal until the trading day ends.</p></div>
         <div className="actions"><span className={`status ${store.dataStatus.toLowerCase()}`}>{store.dataStatus}</span><button onClick={scan} disabled={busy}>{busy ? 'SCANNING…' : 'REFRESH SCAN'}</button></div>
       </header>
 
       <section className="cards">
+        <div className="card"><span>SCANNED TODAY</span><strong>{store.scannedStocks.length}</strong></div>
         <div className="card"><span>CAPTURED TODAY</span><strong>{store.signals.length}</strong></div>
         <div className="card buy"><span>BUY</span><strong>{buys}</strong></div>
         <div className="card sell"><span>SELL</span><strong>{sells}</strong></div>
@@ -65,12 +67,12 @@ export default function Home() {
         <div className="card wide"><span>LAST SCAN</span><strong>{time(store.lastScanAt)}</strong></div>
       </section>
 
-      <div className="banner"><span className="dot" /> <b>{message}</b><span> Capture: 09:15–10:00 IST · Results retained after 10:00 · Auto-refresh: 60 sec</span></div>
+      <div className="banner"><span className="dot" /> <b>{message}</b><span> Scan window: 09:15–10:00 IST · Daily lists retained after 10:00 · Auto-refresh: 60 sec</span></div>
 
-      {store.error && <div className="error">DATA ERROR: {store.error}. Existing captured stocks are retained.</div>}
+      {store.error && <div className="error">DATA ERROR: {store.error}. Existing daily records are retained.</div>}
 
       <section className="panel">
-        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} stock(s) captured during the window</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
+        <div className="panel-head"><div><h2>TODAY'S CAPTURED STOCKS</h2><p>{store.date || '—'} · {store.signals.length} qualifying stock(s) captured during the window</p></div><span className="retained">● RETAINED UNTIL DAY END</span></div>
         <div className="table-wrap">
           <table><thead><tr><th>CAPTURED</th><th>STOCK</th><th>SIDE</th><th>LEVEL</th><th>PRICE</th><th>PDH</th><th>PDL</th><th>VOL</th><th>20 EMA</th><th>REASON</th></tr></thead>
             <tbody>{store.signals.map((s) => <tr key={`${s.symbol}-${s.direction}-${s.level}`}>
@@ -80,7 +82,20 @@ export default function Home() {
           {!store.signals.length && <div className="empty">No qualifying stock has been captured during today's 09:15–10:00 window yet.</div>}
         </div>
       </section>
-      <footer>Scanner only · No orders or trades are executed · Captured stocks remain stored for the day · Upstox credentials remain server-side</footer>
+
+      <section className="panel">
+        <div className="panel-head"><div><h2>TODAY'S SCANNED STOCKS</h2><p>{store.date || '—'} · {store.scannedStocks.length} stock(s) scanned during the 09:15–10:00 window</p></div><span className="retained">● RETAINED FOR DAY</span></div>
+        <div className="table-wrap">
+          <table><thead><tr><th>#</th><th>STOCK</th><th>NAME</th><th>FIRST SCANNED</th></tr></thead>
+            <tbody>{store.scannedStocks.map((s, i) => <tr key={s.symbol}>
+              <td>{i + 1}</td><td className="symbol">{s.symbol}</td><td>{s.name}</td><td>{time(s.firstScannedAt)}</td>
+            </tr>)}</tbody>
+          </table>
+          {!store.scannedStocks.length && <div className="empty">No stocks have been scanned yet today. The list will populate during 09:15–10:00 IST.</div>}
+        </div>
+      </section>
+
+      <footer>Scanner only · No orders or trades are executed · Today's scanned and captured lists remain stored for the day · Upstox credentials remain server-side</footer>
     </main>
   );
 }
