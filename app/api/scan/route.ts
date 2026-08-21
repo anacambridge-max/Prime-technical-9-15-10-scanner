@@ -80,8 +80,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const universe = await getNifty500Symbols();
-    // Only 3 days are required for PDH/PDL plus enough 5-minute bars for EMA20/volume.
-    // This keeps each historical request smaller while still covering the strategy inputs.
+    // Three days cover the previous trading day plus enough 5-minute bars for EMA20/volume.
     const fromDate = dateDaysAgo(3);
     const toDate = date;
     const scanStartedAt = force || afterWindow
@@ -96,8 +95,8 @@ export async function GET(request: NextRequest) {
     }));
     let failures = 0;
 
-    // Keep request concurrency conservative to avoid Upstox 429s. Upstox currently
-    // documents 50 req/sec, 500/min and 2000/30min for standard APIs.
+    // Conservative concurrency reduces 429s. Upstox currently documents 50 req/sec,
+    // 500/min and 2000/30min for standard APIs.
     const concurrency = Math.max(1, Math.min(6, Number(process.env.SCAN_CONCURRENCY ?? 6)));
 
     await mapLimit(universe, concurrency, async (instrument) => {
@@ -118,7 +117,9 @@ export async function GET(request: NextRequest) {
       return null;
     });
 
-    const status = failures === 0 ? 'OK' : signals.length ? 'PARTIAL' : 'ERROR';
+    // Any failed symbol means the scan is PARTIAL; never report a clean ERROR just
+    // because the successful symbols happened to produce zero signals.
+    const status = failures === 0 ? 'OK' : 'PARTIAL';
     const daily = await mergeDaily(
       date,
       signals,
