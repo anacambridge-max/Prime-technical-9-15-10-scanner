@@ -65,9 +65,6 @@ export async function GET(request: NextRequest) {
   const beforeWindow = minutes < 555;
   const existing = await getDaily(date);
 
-  if (!force && afterWindow && existing.historicalBackfillDone) {
-    return NextResponse.json({ ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', message: "Today's historical scan is already complete; daily results are retained.", daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
-  }
   if (!force && beforeWindow) {
     return NextResponse.json({ ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
   }
@@ -75,6 +72,23 @@ export async function GET(request: NextRequest) {
   try {
     const universe = await getNifty500Symbols();
     const totalBatches = Math.ceil(universe.length / BATCH_SIZE);
+
+    // Once all batches are complete, never rescan batch 0 again, even when the UI
+    // sends force=1 after 10:00. This makes the historical backfill truly one-time.
+    if (existing.historicalBatches.length >= totalBatches) {
+      return NextResponse.json({
+        ok: true,
+        scanning: false,
+        historicalWindow: '09:15–10:00 IST',
+        message: "Today's 09:15–10:00 historical scan is complete; daily results are retained.",
+        batch: totalBatches,
+        totalBatches,
+        universe: universe.length,
+        failures: 0,
+        daily: existing,
+      }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+
     let batch: number;
     if (batchParam != null) {
       const parsed = Number(batchParam);
@@ -83,8 +97,12 @@ export async function GET(request: NextRequest) {
       batch = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i)) ?? 0;
     }
 
-    if (!force && afterWindow && existing.historicalBatches.includes(batch)) {
-      return NextResponse.json({ ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', message: `Historical batch ${batch + 1}/${totalBatches} is already loaded.`, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
+    if (existing.historicalBatches.includes(batch)) {
+      const nextMissing = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i));
+      if (nextMissing == null) {
+        return NextResponse.json({ ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', message: "Today's historical scan is complete; daily results are retained.", daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
+      }
+      batch = nextMissing;
     }
 
     const fromDate = dateDaysAgo(3);
@@ -107,7 +125,14 @@ export async function GET(request: NextRequest) {
     });
 
     const status = failures === 0 ? 'OK' : 'PARTIAL';
-    const daily = await mergeDaily(date, signals, status, failures ? `${failures} symbols failed in batch ${batch + 1}/${totalBatches}.` : undefined, scannedStocks, { batch, totalBatches, incrementScanCount: batch === 0 });
+    const daily = await mergeDaily(
+      date,
+      signals,
+      status,
+      failures ? `${failures} symbols failed in batch ${batch + 1}/${totalBatches}.` : undefined,
+      scannedStocks,
+      { batch, totalBatches, incrementScanCount: batch === 0 },
+    );
 
     return NextResponse.json({ ok: true, scanning: !afterWindow, historicalWindow: '09:15–10:00 IST', batch: batch + 1, totalBatches, batchSize: batchItems.length, universe: universe.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
