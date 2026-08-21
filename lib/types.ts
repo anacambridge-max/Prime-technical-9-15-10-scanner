@@ -8,7 +8,8 @@ export type Signal = {
   breakoutCandle: Candle; volumeMultiple: number; referenceVolume: number; ema20: number;
   followThroughCandle?: Candle; reason: string;
 };
+export type ScannedStock = { symbol: string; name: string; firstScannedAt: string };
 export type DailyStore = {
-  date: string; signals: Signal[]; lastScanAt?: string; scanCount: number;
+  date: string; signals: Signal[]; scannedStocks: ScannedStock[]; lastScanAt?: string; scanCount: number;
   dataStatus: 'OK' | 'PARTIAL' | 'ERROR'; error?: string;
 };
