@@ -14,38 +14,35 @@ function authHeaders() {
   return { Accept: 'application/json', Authorization: `Bearer ${token}` };
 }
 
-export async function getNifty500Symbols(): Promise<Instrument[]> {
+export async function getFnoStocks(): Promise<Instrument[]> {
   const now = Date.now();
   if (instrumentCache && now - instrumentCacheAt < INSTRUMENT_TTL) return instrumentCache;
 
-  const [niftyRes, instrumentsRes] = await Promise.all([
-    fetch('https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv', {
-      headers: { 'User-Agent': 'Mozilla/5.0 PrimeTechnicalScanner', Referer: 'https://www.niftyindices.com/indices/equity/broad-based-indices', Accept: 'text/csv,*/*' },
-      cache: 'no-store',
-    }),
-    fetch(NSE_INSTRUMENTS_URL, { cache: 'no-store' }),
-  ]);
-
-  if (!niftyRes.ok) throw new Error(`NIFTY 500 list failed: ${niftyRes.status}`);
+  const instrumentsRes = await fetch(NSE_INSTRUMENTS_URL, { cache: 'no-store' });
   if (!instrumentsRes.ok) throw new Error(`Upstox instruments failed: ${instrumentsRes.status}`);
-
-  const csv = await niftyRes.text();
-  const nseSymbols = new Set(csv.split(/\r?\n/).slice(1).map((line) => line.split(',')[2]?.replaceAll('"', '').trim().toUpperCase()).filter(Boolean));
 
   const bytes = Buffer.from(await instrumentsRes.arrayBuffer());
   const text = gunzipSync(bytes).toString('utf8');
   const raw = JSON.parse(text) as unknown;
   const rows = Array.isArray(raw) ? raw : ((raw as { data?: unknown }).data ?? []);
-  const map = new Map<string, Instrument>();
+  const all = rows as Array<Record<string, unknown>>;
 
-  for (const row of rows as Array<Record<string, unknown>>) {
+  const eqMap = new Map<string, Instrument>();
+  for (const row of all) {
     if (row.segment !== 'NSE_EQ' || row.instrument_type !== 'EQ') continue;
-    const symbol = String(row.trading_symbol ?? '').toUpperCase();
-    if (!nseSymbols.has(symbol)) continue;
-    map.set(symbol, { symbol, instrumentKey: String(row.instrument_key), name: String(row.name ?? symbol) });
+    const symbol = String(row.trading_symbol ?? '').trim().toUpperCase();
+    if (!symbol) continue;
+    eqMap.set(symbol, { symbol, instrumentKey: String(row.instrument_key), name: String(row.name ?? symbol) });
   }
 
-  instrumentCache = [...map.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const fnoSymbols = new Set<string>();
+  for (const row of all) {
+    if (row.segment !== 'NSE_FO' || row.instrument_type !== 'FUT') continue;
+    const underlying = String(row.underlying_symbol ?? row.underlying ?? row.underlying_asset ?? '').trim().toUpperCase();
+    if (underlying && eqMap.has(underlying)) fnoSymbols.add(underlying);
+  }
+
+  instrumentCache = [...fnoSymbols].map((symbol) => eqMap.get(symbol)!).sort((a, b) => a.symbol.localeCompare(b.symbol));
   instrumentCacheAt = now;
   return instrumentCache;
 }
