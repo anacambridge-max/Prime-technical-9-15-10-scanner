@@ -5,11 +5,19 @@ import { getDaily, mergeDaily } from '@/lib/dailyStore';
 import { ScannedStock, Signal } from '@/lib/types';
 
 export const maxDuration = 60;
-const BATCH_SIZE = 50;
+
+// Keep each live request small enough to finish comfortably inside Vercel's
+// function limit. The browser triggers one request every 60 seconds.
+const BATCH_SIZE = 12;
 
 function istParts() {
   const now = new Date();
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
   const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
   const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
@@ -22,17 +30,18 @@ function dateDaysAgo(days: number) {
   return d.toISOString().slice(0, 10);
 }
 
-function batchCaptureTime(date: string, batch: number) {
-  return new Date(new Date(`${date}T09:15:00+05:30`).getTime() + batch * 5 * 60_000).toISOString();
-}
-
 function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function fetchCandlesWithRetry(instrumentKey: string, fromDate: string, toDate: string): Promise<Awaited<ReturnType<typeof getFiveMinuteCandles>>> {
+async function fetchCandlesWithRetry(
+  instrumentKey: string,
+  fromDate: string,
+  toDate: string,
+): Promise<Awaited<ReturnType<typeof getFiveMinuteCandles>>> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { return await getFiveMinuteCandles(instrumentKey, fromDate, toDate); }
-    catch (error) {
+    try {
+      return await getFiveMinuteCandles(instrumentKey, fromDate, toDate);
+    } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
       const retryable = /Historical candles (429|500|502|503|504)/.test(message);
@@ -57,50 +66,76 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 }
 
 export async function GET(request: NextRequest) {
-  const { hour, minute, date } = istParts();
+  const { hour, minute, date, now } = istParts();
   const minutes = hour * 60 + minute;
   const force = request.nextUrl.searchParams.get('force') === '1';
   const batchParam = request.nextUrl.searchParams.get('batch');
-  const afterWindow = minutes > 600;
   const beforeWindow = minutes < 555;
+  const afterWindow = minutes > 600;
   const existing = await getDaily(date);
 
   if (!force && beforeWindow) {
-    return NextResponse.json({ ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date, daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      { ok: true, scanning: false, message: 'Capture window is 09:15–10:00 IST.', date, daily: existing },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
+  // After 10:00 there is no historical backfill. Today's live scanned list is
+  // already stored in Redis and remains available for the rest of the day.
+  if (!force && afterWindow) {
+    return NextResponse.json(
+      {
+        ok: true,
+        scanning: false,
+        historicalWindow: '09:15–10:00 IST',
+        message: "Today's 09:15–10:00 scan is complete; scanned stocks are retained for the day.",
+        daily: existing,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   }
 
   try {
     const universe = await getNifty500Symbols();
     const totalBatches = Math.ceil(universe.length / BATCH_SIZE);
 
-    // Once all batches are complete, never rescan batch 0 again, even when the UI
-    // sends force=1 after 10:00. This makes the historical backfill truly one-time.
     if (existing.historicalBatches.length >= totalBatches) {
-      return NextResponse.json({
-        ok: true,
-        scanning: false,
-        historicalWindow: '09:15–10:00 IST',
-        message: "Today's 09:15–10:00 historical scan is complete; daily results are retained.",
-        batch: totalBatches,
-        totalBatches,
-        universe: universe.length,
-        failures: 0,
-        daily: existing,
-      }, { headers: { 'Cache-Control': 'no-store' } });
+      return NextResponse.json(
+        {
+          ok: true,
+          scanning: false,
+          historicalWindow: '09:15–10:00 IST',
+          message: "Today's full NIFTY 500 scan is complete; results are retained for the day.",
+          batch: totalBatches,
+          totalBatches,
+          universe: universe.length,
+          failures: 0,
+          daily: existing,
+        },
+        { headers: { 'Cache-Control': 'no-store' } },
+      );
     }
 
     let batch: number;
     if (batchParam != null) {
       const parsed = Number(batchParam);
-      batch = Number.isFinite(parsed) ? Math.max(0, Math.min(totalBatches - 1, Math.floor(parsed))) : 0;
+      batch = Number.isFinite(parsed)
+        ? Math.max(0, Math.min(totalBatches - 1, Math.floor(parsed)))
+        : 0;
     } else {
-      batch = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i)) ?? 0;
+      batch = Array.from({ length: totalBatches }, (_, i) => i)
+        .find((i) => !existing.historicalBatches.includes(i)) ?? 0;
     }
 
     if (existing.historicalBatches.includes(batch)) {
-      const nextMissing = Array.from({ length: totalBatches }, (_, i) => i).find((i) => !existing.historicalBatches.includes(i));
+      const nextMissing = Array.from({ length: totalBatches }, (_, i) => i)
+        .find((i) => !existing.historicalBatches.includes(i));
       if (nextMissing == null) {
-        return NextResponse.json({ ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', message: "Today's historical scan is complete; daily results are retained.", daily: existing }, { headers: { 'Cache-Control': 'no-store' } });
+        return NextResponse.json(
+          { ok: true, scanning: false, historicalWindow: '09:15–10:00 IST', daily: existing },
+          { headers: { 'Cache-Control': 'no-store' } },
+        );
       }
       batch = nextMissing;
     }
@@ -108,8 +143,12 @@ export async function GET(request: NextRequest) {
     const fromDate = dateDaysAgo(3);
     const toDate = date;
     const batchItems = universe.slice(batch * BATCH_SIZE, Math.min((batch + 1) * BATCH_SIZE, universe.length));
-    const scanStartedAt = batchCaptureTime(date, batch);
-    const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({ symbol: instrument.symbol, name: instrument.name, firstScannedAt: scanStartedAt }));
+    const scanStartedAt = now.toISOString();
+    const scannedStocks: ScannedStock[] = batchItems.map((instrument) => ({
+      symbol: instrument.symbol,
+      name: instrument.name,
+      firstScannedAt: scanStartedAt,
+    }));
 
     const signals: Signal[] = [];
     let failures = 0;
@@ -118,9 +157,11 @@ export async function GET(request: NextRequest) {
     await mapLimit(batchItems, concurrency, async (instrument) => {
       try {
         const candles = await fetchCandlesWithRetry(instrument.instrumentKey, fromDate, toDate);
-        const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, new Date(`${date}T10:00:00+05:30`), 555, 600);
+        const signal = evaluateSymbol(instrument.symbol, instrument.name, candles, now, 555, 600);
         if (signal) signals.push(signal);
-      } catch { failures += 1; }
+      } catch {
+        failures += 1;
+      }
       return null;
     });
 
@@ -131,13 +172,29 @@ export async function GET(request: NextRequest) {
       status,
       failures ? `${failures} symbols failed in batch ${batch + 1}/${totalBatches}.` : undefined,
       scannedStocks,
-      { batch, totalBatches, incrementScanCount: batch === 0 },
+      { batch, totalBatches, incrementScanCount: true },
     );
 
-    return NextResponse.json({ ok: true, scanning: !afterWindow, historicalWindow: '09:15–10:00 IST', batch: batch + 1, totalBatches, batchSize: batchItems.length, universe: universe.length, failures, daily }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      {
+        ok: true,
+        scanning: !afterWindow,
+        historicalWindow: '09:15–10:00 IST',
+        batch: batch + 1,
+        totalBatches,
+        batchSize: batchItems.length,
+        universe: universe.length,
+        failures,
+        daily,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown scanner error';
     const daily = await mergeDaily(date, [], 'ERROR', message, [], { incrementScanCount: false });
-    return NextResponse.json({ ok: false, scanning: !afterWindow, daily, error: message }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      { ok: false, scanning: !afterWindow, daily, error: message },
+      { status: 500, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
 }
