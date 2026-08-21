@@ -12,4 +12,5 @@ export type ScannedStock = { symbol: string; name: string; firstScannedAt: strin
 export type DailyStore = {
   date: string; signals: Signal[]; scannedStocks: ScannedStock[]; lastScanAt?: string; scanCount: number;
   dataStatus: 'OK' | 'PARTIAL' | 'ERROR'; error?: string;
+  historicalBackfillDone?: boolean;
 };
