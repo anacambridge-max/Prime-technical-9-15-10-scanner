@@ -68,12 +68,21 @@ function rowSymbol(r: Record<string, unknown>): string {
   return String(r.symbol ?? r.Symbol ?? r.underlyingSymbol ?? nested.symbol ?? nested.identifier ?? '').trim().toUpperCase().replace(/[^A-Z0-9&-]/g, '');
 }
 async function nseJson(path: string): Promise<unknown> {
+  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/129 Safari/537.36';
+  const landing = await fetch('https://www.nseindia.com/', {
+    cache: 'no-store',
+    headers: { Accept: 'text/html,application/xhtml+xml,*/*', 'User-Agent': userAgent },
+    signal: AbortSignal.timeout(7000),
+  });
+  const cookieHeaders = (landing.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
+  const cookie = cookieHeaders.map(v => v.split(';')[0]).filter(Boolean).join('; ');
   const res = await fetch(`https://www.nseindia.com/api/${path}`, {
     cache: 'no-store',
     headers: {
       Accept: 'application/json,text/plain,*/*',
       Referer: 'https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market',
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/129 Safari/537.36',
+      'User-Agent': userAgent,
+      ...(cookie ? { Cookie: cookie } : {}),
     },
     signal: AbortSignal.timeout(7000),
   });
