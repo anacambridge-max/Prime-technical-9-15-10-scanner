@@ -93,16 +93,18 @@ export async function refreshPreMarket(date: string, now: Date, windowOpen: bool
   const bySymbol = new Map<string, PreMarketRow>();
   if (preOpenResult.status === 'fulfilled') {
     for (const raw of records(preOpenResult.value)) {
-      const nested = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata as Record<string, unknown> : raw;
+      const metadata = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata as Record<string, unknown> : {};
+      const detail = raw.detail && typeof raw.detail === 'object' ? raw.detail as Record<string, unknown> : {};
+      const nested = { ...raw, ...detail, ...metadata };
       const symbol = rowSymbol(raw) || rowSymbol(nested);
       if (!symbol) continue;
       const previousClose = first(nested, ['previousClose', 'prevClose', 'previous_close']);
       const indicativePrice = first(nested, ['iep', 'indicativePrice', 'lastPrice', 'price']);
       const gapPercent = first(nested, ['pChange', 'changePercent', 'perChange']) ??
-        (previousClose && indicativePrice ? ((indicativePrice - previousClose) / previousClose) * 100 : undefined);
-      const indicativeQuantity = first(nested, ['finalQuantity', 'totalTradedVolume', 'quantity', 'totalQuantity']);
-      const buyQuantity = first(nested, ['totalBuyQuantity', 'buyQuantity']);
-      const sellQuantity = first(nested, ['totalSellQuantity', 'sellQuantity']);
+        (previousClose !== undefined && indicativePrice !== undefined && previousClose !== 0 ? ((indicativePrice - previousClose) / previousClose) * 100 : undefined);
+      const indicativeQuantity = first(nested, ['finalQuantity', 'totalTradedVolume', 'quantity', 'totalQuantity', 'totalTradedQuantity']);
+      const buyQuantity = first(nested, ['totalBuyQuantity', 'buyQuantity', 'totalBuyQty']);
+      const sellQuantity = first(nested, ['totalSellQuantity', 'sellQuantity', 'totalSellQty']);
       const imbalanceQuantity = first(nested, ['iepQty', 'imbalanceQuantity', 'totalBuyQuantityAtEquilibrium']);
       const direction = gapPercent !== undefined && gapPercent > 0.15 ? 'BULLISH' : gapPercent !== undefined && gapPercent < -0.15 ? 'BEARISH' : 'MIXED';
       const score = Math.min(40, Math.round(Math.min(20, Math.abs(gapPercent ?? 0) * 5) + (buyQuantity !== undefined && sellQuantity !== undefined && buyQuantity > sellQuantity * 1.15 ? 10 : sellQuantity !== undefined && buyQuantity !== undefined && sellQuantity > buyQuantity * 1.15 ? 10 : 0) + (indicativeQuantity && indicativeQuantity > 0 ? 10 : 0)));
@@ -122,9 +124,13 @@ export async function refreshPreMarket(date: string, now: Date, windowOpen: bool
       row.oiChange = oiChange;
       row.sources = [...new Set([...row.sources, 'NSE OI Spurts'])];
       row.score = Math.min(100, row.score + Math.min(30, Math.round(Math.abs(oiChangePercent ?? 0) * 0.6)));
-      if (existing && oiChangePercent !== undefined && existing.gapPercent !== undefined) {
-        row.direction = existing.gapPercent >= 0 && positive || existing.gapPercent < 0 && !positive ? existing.direction : 'MIXED';
-      } else if (!existing && oiChangePercent !== undefined) row.direction = positive ? 'BULLISH' : 'BEARISH';
+      // OI expansion alone has no directional meaning. Keep it MIXED unless
+      // pre-open price direction provides independent context.
+      if (existing?.gapPercent !== undefined) {
+        row.direction = existing.gapPercent > 0.15 ? 'BULLISH' : existing.gapPercent < -0.15 ? 'BEARISH' : 'MIXED';
+      } else if (!existing) {
+        row.direction = 'MIXED';
+      }
       bySymbol.set(symbol, row);
     }
   }
