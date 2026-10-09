@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type Row = {
   symbol: string; previousClose?: number; indicativePrice?: number; gapPercent?: number;
@@ -19,8 +19,10 @@ export default function PreMarketPage() {
   const [data,setData] = useState<Payload|null>(null);
   const [error,setError] = useState('');
   const [busy,setBusy] = useState(false);
+  const busyRef = useRef(false);
   const load = useCallback(async () => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const res = await fetch('/api/pre-market',{cache:'no-store'});
@@ -28,8 +30,8 @@ export default function PreMarketPage() {
       if (!res.ok) throw new Error(json.error ?? 'Unable to load pre-market data');
       setData(json); setError('');
     } catch(e) { setError(e instanceof Error ? e.message : 'Request failed'); }
-    finally { setBusy(false); }
-  },[busy]);
+    finally { busyRef.current = false; setBusy(false); }
+  },[]);
   useEffect(() => { void load(); const id = setInterval(() => { void load(); }, 15000); return () => clearInterval(id); },[load]);
   const common = data?.commonConfirmedSignals ?? [];
 
