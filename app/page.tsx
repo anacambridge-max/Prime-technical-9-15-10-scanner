@@ -78,7 +78,7 @@ export default function Home() {
     <main className="shell">
       <header className="header">
         <div><div className="eyebrow">PRIME TECHNICAL</div><h1>09:15 → 10:00 F&O CAPTURE SCANNER</h1><p>F&O stocks are checked live every 60 seconds during 09:15–10:00 IST. Stocks that meet the Prime Technical condition appear in the scanner immediately and remain saved for the day.</p></div>
-        <div className="actions"><a href="/pre-market" style={{color:"#dce5ef",border:"1px solid #26313e",padding:"10px 12px",borderRadius:8,textDecoration:"none",fontSize:12,fontWeight:800}}>PRE-MARKET STUDY ↗</a><span className={`status ${store.dataStatus.toLowerCase()}`}>{store.dataStatus}</span><button onClick={scan} disabled={busy}>{busy ? 'SCANNING…' : 'REFRESH SCAN'}</button></div>
+        <div className="actions"><span className={`status ${store.dataStatus.toLowerCase()}`}>{store.dataStatus}</span><button onClick={scan} disabled={busy}>{busy ? 'SCANNING…' : 'REFRESH SCAN'}</button></div>
       </header>
 
       <section className="cards">
